@@ -424,6 +424,36 @@ Return ONLY valid JSON:
 // The 5 agents (financial, food-medicine, media, relationship, moonshot)
 // each have unique system prompts personalized with user profile + memory.
 // ═══════════════════════════════════════════════════════════════
+// ── Embedding service helpers ─────────────────────────────────────
+const EMBEDDING_SERVICE_URL = process.env.EMBEDDING_SERVICE_URL || "http://localhost:8000";
+
+async function searchUserDocuments(userId, query, topK = 4) {
+  try {
+    const res = await fetch(`${EMBEDDING_SERVICE_URL}/api/v1/embeddings/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, user_id: userId, top_k: topK }),
+      signal: AbortSignal.timeout(3000), // don't block the response if service is slow
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.results || [];
+  } catch {
+    return []; // embedding service is optional — never break chat
+  }
+}
+
+function buildDocumentContext(results) {
+  if (!results.length) return "";
+  const snippets = results
+    .filter(r => r.similarity_score >= 0.35)
+    .map(r => `[${r.file_name}]\n${r.text}`)
+    .join("\n\n---\n\n");
+  return snippets
+    ? `\n\nRELEVANT DOCUMENTS FROM USER'S FILES:\n${snippets}`
+    : "";
+}
+
 exports.onChatMessage = onCall({ secrets: [ANTHROPIC_API_KEY] }, async (request) => {
   const { userId, agentId, message, threadId } = request.data;
   const [userData, memory] = await Promise.all([getUserData(userId), getMemory(userId)]);
@@ -462,7 +492,12 @@ Career: ${o.careerDirection}. Risk Tolerance: ${o.riskTolerance}/10. Personality
 Keep them on their highest trajectory. Ask "What would the extraordinary version of you do here?" Tone: ${o.tonePref}.${memoryBlock}`,
   };
 
-  const systemPrompt = agentPrompts[agentId] || agentPrompts.financial;
+  const basePrompt = agentPrompts[agentId] || agentPrompts.financial;
+
+  // Fetch relevant document context from embedding service (non-blocking)
+  const docResults = await searchUserDocuments(userId, message);
+  const docContext = buildDocumentContext(docResults);
+  const systemPrompt = basePrompt + docContext;
 
   // Load recent chat history (thread-aware)
   const historyRef = threadId

@@ -1,0 +1,19 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.12
+python-dotenv==1.0.1
+
+# Text extraction
+PyPDF2==3.0.1
+python-docx==1.1.2
+
+# Embeddings
+openai==1.51.0
+sentence-transformers==3.1.1
+
+# Vector store
+chromadb==0.5.11
+
+# Utilities
+tiktoken==0.7.0
+pydantic==2.9.2

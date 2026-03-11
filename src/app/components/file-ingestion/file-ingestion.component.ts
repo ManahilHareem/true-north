@@ -21,6 +21,7 @@ import { Component, Input, Output, EventEmitter, OnInit, inject, NgZone } from '
 import { CommonModule } from '@angular/common';
 import { UserDataService } from '../../services/user-data.service';
 import { ApiService } from '../../services/api.service';
+import { EmbeddingService } from '../../services/embedding.service';
 import { environment } from '../../../environments/environment';
 
 interface IngestItem {
@@ -156,6 +157,7 @@ export class FileIngestionComponent implements OnInit {
 
   private userData = inject(UserDataService);
   private api = inject(ApiService);
+  private embedding = inject(EmbeddingService);
   private zone = inject(NgZone);
 
   driveEnabled = !!environment.googleDriveClientId;
@@ -314,7 +316,7 @@ export class FileIngestionComponent implements OnInit {
 
       const fileUrl = await this.userData.uploadFile(this.userId, file);
 
-      await this.userData.saveFileMeta(this.userId, {
+      const fileId = await this.userData.saveFileMeta(this.userId, {
         fileName: file.name,
         fileUrl,
         fileType: file.type || 'unknown',
@@ -326,6 +328,11 @@ export class FileIngestionComponent implements OnInit {
       });
 
       this.zone.run(() => { item.status = 'processing'; });
+
+      // Index file in embedding service (fire-and-forget — errors don't fail the upload)
+      this.embedding.indexFile(file, fileId, this.userId).catch(e =>
+        console.warn('Embedding indexing error (file safely stored):', e)
+      );
 
       // Fire-and-forget processing — errors don't fail the upload
       this.dispatchProcessing(fileUrl, file.name).catch(e =>

@@ -10,6 +10,7 @@ import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { AuthService } from '../../services/auth.service';
 import { UserDataService } from '../../services/user-data.service';
+import { EmbeddingService } from '../../services/embedding.service';
 import { UploadedFile } from '../../models/interfaces';
 import { FileIngestionComponent } from '../../components/file-ingestion/file-ingestion.component';
 
@@ -200,6 +201,7 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
 export class FilesComponent implements OnInit {
   private auth = inject(AuthService);
   private userData = inject(UserDataService);
+  private embedding = inject(EmbeddingService);
   private zone = inject(NgZone);
   router = inject(Router);
 
@@ -243,6 +245,9 @@ export class FilesComponent implements OnInit {
     this.deleteError = '';
     try {
       await this.userData.deleteUpload(this.currentUserId, file.id);
+      this.embedding.deleteFileEmbeddings(file.id).catch(e =>
+        console.warn('Embedding delete error:', e)
+      );
       this.zone.run(() => { this.files = this.files.filter(f => f.id !== file.id); });
     } catch (e: any) {
       this.zone.run(() => { this.deleteError = 'Could not delete file. Please try again.'; });
