@@ -14,6 +14,7 @@
  */
 import { Injectable, inject, Injector, runInInjectionContext } from '@angular/core';
 import { Functions, httpsCallable } from '@angular/fire/functions';
+import { AvailableAgent, PersonalizedRespondResult, RunAgentTaskResult, SpecializedAgentType } from '../models/interfaces';
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
@@ -99,5 +100,38 @@ export class ApiService {
 
   async processFile(userId: string, fileUrl: string, fileName: string): Promise<any> {
     return this.call('onFileUpload', { userId, fileUrl, fileName });
+  }
+
+  async personalizedRespond(
+    userId: string,
+    message: string,
+    options?: { threadId?: string; preferredAgent?: SpecializedAgentType; mode?: 'auto' | 'direct' }
+  ): Promise<PersonalizedRespondResult> {
+    return this.call('onPersonalizedRespond', {
+      userId,
+      message,
+      ...(options?.threadId ? { threadId: options.threadId } : {}),
+      ...(options?.preferredAgent ? { preferredAgent: options.preferredAgent } : {}),
+      ...(options?.mode ? { mode: options.mode } : {}),
+    });
+  }
+
+  async runAgentTask(
+    userId: string,
+    agentType: SpecializedAgentType,
+    task: string,
+    options?: { threadId?: string; options?: Record<string, unknown> }
+  ): Promise<RunAgentTaskResult> {
+    return this.call('onRunAgentTask', {
+      userId,
+      agentType,
+      task,
+      ...(options?.threadId ? { threadId: options.threadId } : {}),
+      ...(options?.options ? { options: options.options } : {}),
+    });
+  }
+
+  async listAvailableAgents(userId: string): Promise<{ agents: AvailableAgent[] }> {
+    return this.call('onListAvailableAgents', { userId });
   }
 }

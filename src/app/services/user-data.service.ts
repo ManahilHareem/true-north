@@ -36,7 +36,7 @@ import {
   LexiconItem, DailyBriefing, FutureVision, Edition, TranscriptExtraction,
   Thread, UploadedFile, ReframeAnalysis, Feedback, AgentId,
   UserMemory, DimensionScores, GameDay, DaySnapshot, TodoItem,
-  CoherenceMetrics, EntryCalibration
+  CoherenceMetrics, EntryCalibration, VaultConfig, VaultLoginItem
 } from '../models/interfaces';
 
 @Injectable({ providedIn: 'root' })
@@ -98,6 +98,65 @@ export class UserDataService {
   async deleteUpload(userId: string, fileId: string): Promise<void> {
     await this.firestoreCall(() =>
       deleteDoc(doc(this.firestore, 'users', userId, 'uploads', fileId))
+    );
+  }
+
+  // ── Password Vault ────────────────────────────────────────
+  async getVaultConfig(userId: string): Promise<VaultConfig | null> {
+    const snap = await this.firestoreCall(() =>
+      getDoc(doc(this.firestore, 'users', userId, 'vault', 'config'))
+    );
+    return snap.exists() ? (snap.data() as VaultConfig) : null;
+  }
+
+  async saveVaultConfig(userId: string, config: Omit<VaultConfig, 'createdAt' | 'updatedAt'>): Promise<void> {
+    const ref = doc(this.firestore, 'users', userId, 'vault', 'config');
+    const existing = await this.firestoreCall(() => getDoc(ref));
+    await this.firestoreCall(() =>
+      setDoc(ref, {
+        ...config,
+        createdAt: existing.exists() ? existing.data()['createdAt'] : serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+  }
+
+  async getVaultItems(userId: string): Promise<VaultLoginItem[]> {
+    const snap = await this.firestoreCall(() => {
+      return getDocs(collection(this.firestore, 'users', userId, 'vault', 'config', 'items'));
+    });
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data() } as VaultLoginItem))
+      .sort((a, b) => {
+        const aTime = a.updatedAt?.toMillis?.() ?? a.createdAt?.toMillis?.() ?? 0;
+        const bTime = b.updatedAt?.toMillis?.() ?? b.createdAt?.toMillis?.() ?? 0;
+        return bTime - aTime;
+      });
+  }
+
+  async createVaultItem(userId: string, item: Omit<VaultLoginItem, 'id' | 'createdAt' | 'updatedAt'>): Promise<string> {
+    const docRef = await this.firestoreCall(() =>
+      addDoc(collection(this.firestore, 'users', userId, 'vault', 'config', 'items'), {
+        ...item,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+    return docRef.id;
+  }
+
+  async updateVaultItem(userId: string, itemId: string, item: Partial<Omit<VaultLoginItem, 'id' | 'createdAt' | 'updatedAt'>>): Promise<void> {
+    await this.firestoreCall(() =>
+      updateDoc(doc(this.firestore, 'users', userId, 'vault', 'config', 'items', itemId), {
+        ...item,
+        updatedAt: serverTimestamp(),
+      })
+    );
+  }
+
+  async deleteVaultItem(userId: string, itemId: string): Promise<void> {
+    await this.firestoreCall(() =>
+      deleteDoc(doc(this.firestore, 'users', userId, 'vault', 'config', 'items', itemId))
     );
   }
 

@@ -62,5 +62,10 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/files/files.component').then(m => m.FilesComponent),
     canActivate: [authGuard],
   },
+  {
+    path: 'vault',
+    loadComponent: () => import('./pages/vault/vault.component').then(m => m.VaultComponent),
+    canActivate: [authGuard],
+  },
   { path: '**', redirectTo: 'login' },
 ];

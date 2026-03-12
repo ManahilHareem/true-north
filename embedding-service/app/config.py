@@ -36,10 +36,15 @@ CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "512"))
 CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "64"))
 
 # ── ChromaDB Cloud Config ─────────────────────────────────────────
+CHROMA_USE_CLOUD: bool = os.getenv("CHROMA_USE_CLOUD", "false").strip().lower() == "true"
 CHROMA_HOST: str = os.getenv("CHROMA_HOST", "")
 CHROMA_API_KEY: str = os.getenv("CHROMA_API_KEY", "")
 CHROMA_TENANT: str = os.getenv("CHROMA_TENANT", "")
 CHROMA_DATABASE: str = os.getenv("CHROMA_DATABASE", "default_database")
+CHROMA_PERSIST_DIR: str = os.getenv(
+    "CHROMA_PERSIST_DIR",
+    str(Path(__file__).parent.parent / "chroma_data"),
+)
 
 # ── Upload Config ─────────────────────────────────────────────────
 MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "50"))

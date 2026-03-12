@@ -12,7 +12,7 @@ openai==1.51.0
 sentence-transformers==3.1.1
 
 # Vector store
-chromadb==0.5.11
+chromadb==1.5.2
 
 # Utilities
 tiktoken==0.7.0

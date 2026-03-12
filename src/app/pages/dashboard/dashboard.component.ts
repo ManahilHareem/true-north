@@ -168,6 +168,9 @@ import { AGENT_NAMES, AGENT_TAGLINES, AGENT_ICONS } from '../../prompts/template
               <div class="card card-interactive tool-card" (click)="navigate('/files')">
                 <span class="tool-icon">📁</span><span>My Files</span>
               </div>
+              <div class="card card-interactive tool-card" (click)="navigate('/vault')">
+                <span class="tool-icon">🔐</span><span>Password Vault</span>
+              </div>
               <div *ngIf="userRole === 'founder' || userRole === 'admin'" class="card card-interactive tool-card tool-founder" (click)="navigate('/intelligence')">
                 <span class="tool-icon">🧠</span><span>Intelligence Agent</span>
               </div>

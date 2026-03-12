@@ -18,11 +18,19 @@ Operations:
 """
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 import chromadb
 
-from app.config import CHROMA_HOST, CHROMA_API_KEY, CHROMA_TENANT, CHROMA_DATABASE, EMBEDDING_PROVIDER
+from app.config import (
+    CHROMA_API_KEY,
+    CHROMA_DATABASE,
+    CHROMA_PERSIST_DIR,
+    CHROMA_TENANT,
+    CHROMA_USE_CLOUD,
+    EMBEDDING_PROVIDER,
+)
 from app.chunker import TextChunk
 
 logger = logging.getLogger("embedding-service")
@@ -35,17 +43,21 @@ COLLECTION_NAME = "truenorth_embeddings"
 
 
 def _get_client() -> chromadb.ClientAPI:
-    """Get or create the ChromaDB cloud client."""
+    """Get or create the ChromaDB client."""
     global _chroma_client
     if _chroma_client is None:
-        _chroma_client = chromadb.HttpClient(
-            host=CHROMA_HOST,
-            ssl=True,
-            headers={"x-chroma-token": CHROMA_API_KEY},
-            tenant=CHROMA_TENANT,
-            database=CHROMA_DATABASE,
-        )
-        logger.info(f"🗃️  ChromaDB cloud initialized: {CHROMA_HOST} / {CHROMA_DATABASE}")
+        if CHROMA_USE_CLOUD:
+            _chroma_client = chromadb.CloudClient(
+                tenant=CHROMA_TENANT,
+                database=CHROMA_DATABASE,
+                api_key=CHROMA_API_KEY or None,
+            )
+            logger.info(f"🗃️  ChromaDB cloud initialized: {CHROMA_TENANT} / {CHROMA_DATABASE}")
+        else:
+            persist_dir = Path(CHROMA_PERSIST_DIR).expanduser().resolve()
+            persist_dir.mkdir(parents=True, exist_ok=True)
+            _chroma_client = chromadb.PersistentClient(path=str(persist_dir))
+            logger.info(f"🗃️  ChromaDB local store initialized: {persist_dir}")
     return _chroma_client
 
 

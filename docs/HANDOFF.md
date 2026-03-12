@@ -69,7 +69,31 @@ State machine: no_game → pending_choice → in_progress → completed
 5 daily articles from web search, personalized to user interests.
 
 ### 8. Intelligence Agent (Founders Only)
-Transcript upload → structured data extraction → thread tracking → natural language queries.
+Founder/admin-only workspace for transcript intelligence plus the newer retrieval-backed runtime.
+
+Current tabs:
+- **Upload** — ingest transcripts, meeting notes, and strategy docs
+- **Briefs** — extracted executive summaries, decisions, risks, actions, and entities
+- **Threads** — evolving topic threads and open loops across transcripts
+- **People** — deduplicated person/entity extraction
+- **Query** — natural-language questions across transcript data via `onTranscriptQuery`
+- **Search** — semantic search over indexed founder documents via the local embedding service
+- **Agents** — run the personalized runtime in auto mode or invoke a specialized agent directly
+
+Current callable endpoints behind this page:
+- `onTranscriptProcess`
+- `onTranscriptQuery`
+- `onListAvailableAgents`
+- `onPersonalizedRespond`
+- `onRunAgentTask`
+
+The Agents tab exposes:
+- **Auto Route** — runtime chooses the best specialized agent
+- **Direct Agent** — user chooses a specific agent
+- retrieval status and retrieved evidence display
+- memory update queued status for runtime calls
+
+Available specialized agents are loaded dynamically from the backend registry rather than hardcoded in the UI.
 
 ### 9. Daily Briefing
 Personalized morning brief with financial insight, health suggestion, relationship reflection, growth reminder, and real news headlines via web search.
@@ -98,5 +122,5 @@ The `TILE_CHOICE_FRAMEWORKS` in functions/index.js define fixed choices per tile
 ### No Tests
 There are currently no automated tests. The project uses Angular's test setup but no test files have been written.
 
-### Firestore Rules Are Wide Open
-The current rules allow all reads/writes with a time-based expiration. This MUST be replaced with proper per-user rules before any real launch. See `docs/FIRESTORE_RULES.md`.
+### Firestore Rules
+Firestore rules have been tightened to same-user access under `users/{uid}`. Any new feature should stay inside that user-owned namespace or be designed explicitly around a different access model. See `docs/FIRESTORE_RULES.md`.

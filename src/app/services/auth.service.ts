@@ -16,6 +16,7 @@ import { Auth, signInWithPopup, GoogleAuthProvider, signOut, user, User, createU
 import { Firestore, doc, getDoc, setDoc, serverTimestamp } from '@angular/fire/firestore';
 import { Observable } from 'rxjs';
 import { Router } from '@angular/router';
+import { VaultCryptoService } from './vault-crypto.service';
 
 @Injectable({ providedIn: 'root' })
 export class AuthService {
@@ -23,6 +24,7 @@ export class AuthService {
   private firestore = inject(Firestore);
   private router = inject(Router);
   private injector = inject(Injector);
+  private vaultCrypto = inject(VaultCryptoService);
 
   /** Emits current auth user (or null). Used by AuthGuard and components. */
   user$: Observable<User | null> = user(this.auth);
@@ -43,6 +45,7 @@ export class AuthService {
   }
 
   async signOut(): Promise<void> {
+    this.vaultCrypto.clearSession();
     await signOut(this.auth);
     this.router.navigate(['/login']);
   }

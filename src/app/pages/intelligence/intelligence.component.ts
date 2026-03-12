@@ -19,8 +19,16 @@ import { Router } from '@angular/router';
 import { AuthService } from '../../services/auth.service';
 import { UserDataService } from '../../services/user-data.service';
 import { ApiService } from '../../services/api.service';
+import { EmbeddingSearchResult, EmbeddingService } from '../../services/embedding.service';
 import { ThemeService } from '../../services/theme.service';
-import { TranscriptExtraction, Thread } from '../../models/interfaces';
+import {
+  AvailableAgent,
+  PersonalizedRespondResult,
+  RunAgentTaskResult,
+  SpecializedAgentType,
+  TranscriptExtraction,
+  Thread,
+} from '../../models/interfaces';
 import { FileIngestionComponent } from '../../components/file-ingestion/file-ingestion.component';
 
 @Component({
@@ -36,12 +44,10 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
           <span class="founder-badge">Founders Only</span>
         </div>
 
-        <!-- Tabs -->
         <div class="tabs">
-          <button *ngFor="let t of ['Upload','Briefs','Threads','People','Query']" class="tab" [class.active]="activeTab === t" (click)="activeTab = t">{{ t }}</button>
+          <button *ngFor="let t of tabs" class="tab" [class.active]="activeTab === t" (click)="activeTab = t">{{ t }}</button>
         </div>
 
-        <!-- UPLOAD TAB -->
         <div *ngIf="activeTab === 'Upload'" class="tab-content animate-fade">
           <app-file-ingestion
             [userId]="currentUserId"
@@ -53,7 +59,6 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
           </app-file-ingestion>
         </div>
 
-        <!-- BRIEFS TAB -->
         <div *ngIf="activeTab === 'Briefs'" class="tab-content animate-fade">
           <div *ngIf="extractions.length === 0" class="empty-state">
             <p>No transcripts processed yet. Upload call recordings or transcripts to get started.</p>
@@ -122,7 +127,6 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
           </div>
         </div>
 
-        <!-- THREADS TAB -->
         <div *ngIf="activeTab === 'Threads'" class="tab-content animate-fade">
           <div *ngIf="threads.length === 0" class="empty-state">
             <p>No threads yet. Threads form automatically as you process transcripts.</p>
@@ -148,7 +152,6 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
           </div>
         </div>
 
-        <!-- PEOPLE TAB -->
         <div *ngIf="activeTab === 'People'" class="tab-content animate-fade">
           <div *ngIf="people.length === 0" class="empty-state">
             <p>No people tracked yet. People are extracted from processed transcripts.</p>
@@ -160,7 +163,6 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
           </div>
         </div>
 
-        <!-- QUERY TAB -->
         <div *ngIf="activeTab === 'Query'" class="tab-content animate-fade">
           <p class="query-desc">Ask questions across all your processed transcripts. Answers are grounded in the data with citations.</p>
 
@@ -186,6 +188,95 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
             </div>
           </div>
         </div>
+
+        <div *ngIf="activeTab === 'Search'" class="tab-content animate-fade">
+          <p class="query-desc">Semantic search across indexed founder documents using the embedding service and Chroma-backed ingestion pipeline.</p>
+
+          <div class="query-examples">
+            <span class="example-chip" *ngFor="let ex of searchExamples" (click)="searchText = ex">{{ ex }}</span>
+          </div>
+
+          <div class="query-input-area">
+            <textarea [(ngModel)]="searchText" placeholder="Search documents by meaning, not exact keyword…" rows="2"></textarea>
+            <button class="btn-primary" (click)="submitSearch()" [disabled]="!searchText.trim() || searchLoading">
+              {{ searchLoading ? 'Searching...' : 'Search' }}
+            </button>
+          </div>
+
+          <div *ngIf="searchError" class="error-banner">{{ searchError }}</div>
+
+          <div *ngIf="!searchLoading && searchResults.length === 0 && searchText.trim() && !searchError" class="empty-state">
+            <p>No relevant chunks found yet.</p>
+          </div>
+
+          <div *ngFor="let result of searchResults" class="search-result card">
+            <div class="search-result-header">
+              <div>
+                <h4>{{ result.file_name }}</h4>
+                <span class="result-meta">Chunk {{ result.chunk_index }} · score {{ formatScore(result.similarity_score) }}</span>
+              </div>
+            </div>
+            <p class="search-result-text">{{ result.text }}</p>
+          </div>
+        </div>
+
+        <div *ngIf="activeTab === 'Agents'" class="tab-content animate-fade">
+          <p class="query-desc">Run the new personalized runtime in auto mode or invoke a specialized agent directly with retrieved document context.</p>
+
+          <div *ngIf="agentCatalog.length" class="agent-grid">
+            <button
+              *ngFor="let agent of agentCatalog"
+              class="agent-card"
+              [class.active]="selectedAgent === agent.id"
+              (click)="selectAgent(agent.id)">
+              <div class="agent-card-header">
+                <strong>{{ agent.name }}</strong>
+                <span class="agent-chip">{{ agent.id }}</span>
+              </div>
+              <p>{{ agent.description }}</p>
+            </button>
+          </div>
+
+          <div class="mode-toggle">
+            <button class="tab" [class.active]="agentMode === 'auto'" (click)="agentMode = 'auto'">Auto Route</button>
+            <button class="tab" [class.active]="agentMode === 'direct'" (click)="agentMode = 'direct'">Direct Agent</button>
+          </div>
+
+          <div class="query-input-area">
+            <textarea [(ngModel)]="agentTask" placeholder="Ask the personalized runtime a question or give a task to a specific agent…" rows="3"></textarea>
+            <button class="btn-primary" (click)="runAgentFlow()" [disabled]="!agentTask.trim() || agentLoading">
+              {{ agentLoading ? 'Running...' : (agentMode === 'auto' ? 'Run Runtime' : 'Run Agent') }}
+            </button>
+          </div>
+
+          <div *ngIf="agentError" class="error-banner">{{ agentError }}</div>
+
+          <div *ngIf="agentResponseText" class="query-response card animate-fade">
+            <div class="agent-response-header">
+              <div>
+                <h4>{{ agentMode === 'auto' ? 'Personalized Runtime Response' : 'Agent Response' }}</h4>
+                <span class="result-meta">
+                  {{ activeAgentLabel }} · retrieval {{ retrievalStatus || 'unknown' }}
+                  <span *ngIf="memoryUpdateQueued !== null"> · memory {{ memoryUpdateQueued ? 'queued' : 'not queued' }}</span>
+                </span>
+              </div>
+            </div>
+            <div class="response-text" [innerHTML]="formatResponse(agentResponseText)"></div>
+          </div>
+
+          <div *ngIf="agentEvidence.length" class="evidence-list">
+            <h5>Retrieved Evidence</h5>
+            <div *ngFor="let evidence of agentEvidence" class="evidence-card card">
+              <div class="search-result-header">
+                <div>
+                  <h4>{{ evidence.sourceName }}</h4>
+                  <span class="result-meta">{{ evidence.sourceType }} · score {{ formatScore(evidence.score) }}</span>
+                </div>
+              </div>
+              <p class="search-result-text">{{ evidence.text }}</p>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   `,
@@ -205,7 +296,7 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
     }
     .tab.active { background: var(--accent-soft); color: var(--accent-primary); border-color: var(--accent-primary); }
 
-.brief-card { margin-bottom: 12px; padding: 0; overflow: hidden; }
+    .brief-card { margin-bottom: 12px; padding: 0; overflow: hidden; }
     .brief-header {
       display: flex; justify-content: space-between; align-items: center; padding: 18px 20px;
       cursor: pointer; transition: background 0.2s;
@@ -290,6 +381,41 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
     .history-item { padding: 8px 12px; background: var(--bg-surface); border-radius: var(--radius-sm); margin-bottom: 4px; cursor: pointer; transition: background 0.2s; }
     .history-item:hover { background: var(--bg-elevated); }
     .history-q { font-size: 0.85rem; color: var(--text-secondary); }
+    .search-result, .evidence-card { margin-bottom: 12px; }
+    .search-result-header, .agent-response-header, .agent-card-header {
+      display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px;
+    }
+    .search-result-header h4, .agent-response-header h4 { font-family: var(--font-display); color: var(--text-primary); }
+    .search-result-text { font-size: 0.9rem; color: var(--text-secondary); line-height: 1.7; white-space: pre-wrap; }
+    .result-meta {
+      font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .error-banner {
+      padding: 12px 14px; margin-bottom: 16px; border-radius: var(--radius-sm);
+      background: rgba(231,76,60,0.12); border: 1px solid rgba(231,76,60,0.28); color: #e74c3c;
+      font-size: 0.85rem;
+    }
+    .agent-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px; margin-bottom: 18px;
+    }
+    .agent-card {
+      border: 1px solid var(--border-subtle); background: var(--bg-surface); border-radius: var(--radius-md);
+      padding: 16px; text-align: left; cursor: pointer; transition: all 0.2s;
+    }
+    .agent-card:hover, .agent-card.active {
+      border-color: var(--accent-primary); background: var(--bg-elevated);
+    }
+    .agent-card p { font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6; }
+    .agent-chip {
+      font-size: 0.72rem; padding: 3px 8px; border-radius: 100px; background: var(--accent-soft);
+      color: var(--accent-primary); text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .mode-toggle { display: flex; gap: 8px; margin-bottom: 16px; }
+    .evidence-list { margin-top: 18px; }
+    .evidence-list h5 {
+      font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px;
+    }
 
     .empty-state { text-align: center; padding: 60px 20px; }
     .empty-state p { color: var(--text-muted); }
@@ -299,12 +425,14 @@ export class IntelligenceComponent implements OnInit {
   private auth = inject(AuthService);
   private userData = inject(UserDataService);
   private api = inject(ApiService);
+  private embedding = inject(EmbeddingService);
   private theme = inject(ThemeService);
   private router = inject(Router);
   private zone = inject(NgZone);
 
   currentUserId = this.auth.getCurrentUserId() ?? '';
   activeTab = 'Upload';
+  tabs = ['Upload', 'Briefs', 'Threads', 'People', 'Query', 'Search', 'Agents'];
 
   extractions: TranscriptExtraction[] = [];
   expandedBrief: string | null | undefined = null;
@@ -316,6 +444,21 @@ export class IntelligenceComponent implements OnInit {
   queryLoading = false;
   queryResponse = '';
   queryHistory: { question: string; answer: string }[] = [];
+  searchText = '';
+  searchLoading = false;
+  searchError = '';
+  searchResults: EmbeddingSearchResult[] = [];
+  agentCatalog: AvailableAgent[] = [];
+  agentMode: 'auto' | 'direct' = 'auto';
+  selectedAgent: SpecializedAgentType = 'knowledge';
+  agentTask = '';
+  agentLoading = false;
+  agentError = '';
+  agentResponseText = '';
+  retrievalStatus: 'ok' | 'empty' | 'degraded' | '' = '';
+  memoryUpdateQueued: boolean | null = null;
+  activeAgentLabel = 'knowledge';
+  agentEvidence: { sourceName: string; sourceType: string; text: string; score: number }[] = [];
 
   queryExamples = [
     'What are the top open loops?',
@@ -323,6 +466,12 @@ export class IntelligenceComponent implements OnInit {
     'List all investment ideas discussed',
     'Who do we need to follow up with?',
     'What contradictions have emerged?',
+  ];
+  searchExamples = [
+    'fundraising strategy discussion',
+    'pricing concerns from founders',
+    'tokenization roadmap',
+    'team hiring risks',
   ];
 
   async ngOnInit() {
@@ -335,8 +484,13 @@ export class IntelligenceComponent implements OnInit {
     this.extractions = await this.userData.getTranscriptExtractions(userId);
     this.threads = await this.userData.getThreads(userId);
     this.people = await this.userData.getAllEntities(userId);
-    // Filter to people only
-    this.people = this.people.filter(e => e.type === 'person');
+    this.people = this.people.filter((e) => e.type === 'person');
+    const { agents } = await this.api.listAvailableAgents(userId);
+    this.agentCatalog = agents;
+    if (agents.length > 0) {
+      this.selectedAgent = agents[0].id;
+      this.activeAgentLabel = agents[0].id;
+    }
   }
 
   async onTranscriptIngested(event: { fileName: string; fileUrl: string; source: 'local' | 'drive' }) {
@@ -377,9 +531,92 @@ export class IntelligenceComponent implements OnInit {
     }
   }
 
+  async submitSearch() {
+    const userId = this.auth.getCurrentUserId();
+    if (!userId || !this.searchText.trim()) return;
+    this.searchLoading = true;
+    this.searchError = '';
+    try {
+      const results = await this.embedding.searchDocuments(this.searchText, userId, 6);
+      this.zone.run(() => {
+        this.searchResults = results;
+        this.searchLoading = false;
+      });
+    } catch (error) {
+      console.error(error);
+      this.zone.run(() => {
+        this.searchResults = [];
+        this.searchError = 'Semantic search failed. Make sure the embedding service is running.';
+        this.searchLoading = false;
+      });
+    }
+  }
+
+  selectAgent(agentId: SpecializedAgentType) {
+    this.selectedAgent = agentId;
+    this.activeAgentLabel = agentId;
+  }
+
+  async runAgentFlow() {
+    const userId = this.auth.getCurrentUserId();
+    if (!userId || !this.agentTask.trim()) return;
+
+    this.agentLoading = true;
+    this.agentError = '';
+    this.agentResponseText = '';
+    this.agentEvidence = [];
+    this.retrievalStatus = '';
+    this.memoryUpdateQueued = null;
+
+    try {
+      if (this.agentMode === 'auto') {
+        const result = await this.api.personalizedRespond(userId, this.agentTask, {
+          mode: 'auto',
+          preferredAgent: this.selectedAgent,
+        });
+        this.applyPersonalizedResult(result);
+      } else {
+        const result = await this.api.runAgentTask(userId, this.selectedAgent, this.agentTask);
+        this.applyAgentTaskResult(result);
+      }
+    } catch (error) {
+      console.error(error);
+      this.zone.run(() => {
+        this.agentError = 'Agent execution failed. If AI calls are erroring, check Anthropic billing and the local embedding service.';
+        this.agentLoading = false;
+      });
+    }
+  }
+
+  private applyPersonalizedResult(result: PersonalizedRespondResult) {
+    this.zone.run(() => {
+      this.agentResponseText = result.response;
+      this.activeAgentLabel = result.selectedAgent;
+      this.retrievalStatus = result.retrievalStatus;
+      this.memoryUpdateQueued = result.memoryUpdateQueued;
+      this.agentEvidence = result.evidence;
+      this.agentLoading = false;
+    });
+  }
+
+  private applyAgentTaskResult(result: RunAgentTaskResult) {
+    this.zone.run(() => {
+      this.agentResponseText = result.result;
+      this.activeAgentLabel = result.agentType;
+      this.retrievalStatus = result.retrievalStatus;
+      this.memoryUpdateQueued = null;
+      this.agentEvidence = result.evidence;
+      this.agentLoading = false;
+    });
+  }
+
   getEntityIcon(type: string): string {
     const icons: Record<string, string> = { person: '👤', org: '🏢', project: '📋', asset: '💎' };
     return icons[type] || '◆';
+  }
+
+  formatScore(score: number): string {
+    return Number.isFinite(score) ? score.toFixed(3) : 'n/a';
   }
 
   formatResponse(text: string): string {

@@ -327,6 +327,103 @@ export interface MemoryUpdate {
   avoidanceSignal: string | null;
 }
 
+// ── Personalized Runtime / Agent Orchestration ──────────────
+export type SpecializedAgentType = 'knowledge' | 'research' | 'memory' | 'recommendation';
+
+export interface RetrievedEvidence {
+  documentId: string;
+  chunkId: string;
+  text: string;
+  score: number;
+  sourceType: string;
+  sourceName: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface AvailableAgent {
+  id: SpecializedAgentType;
+  name: string;
+  description: string;
+  capabilities: string[];
+}
+
+export interface PersonalizedRespondResult {
+  response: string;
+  selectedAgent: SpecializedAgentType;
+  evidence: RetrievedEvidence[];
+  retrievalStatus: 'ok' | 'empty' | 'degraded';
+  memoryUpdateQueued: boolean;
+}
+
+export interface RunAgentTaskResult {
+  result: string;
+  agentType: SpecializedAgentType;
+  evidence: RetrievedEvidence[];
+  retrievalStatus: 'ok' | 'empty' | 'degraded';
+}
+
+// ── Password Vault ──────────────────────────────────────────
+export interface VaultKdfParams {
+  algorithm: 'argon2id';
+  iterations: number;
+  memorySize: number;
+  parallelism: number;
+  hashLength: number;
+  salt: string;
+}
+
+export interface EncryptedVaultPayload {
+  iv: string;
+  ciphertext: string;
+}
+
+export interface VaultConfig {
+  cryptoVersion: number;
+  kdf: VaultKdfParams;
+  wrappedVaultKeyByPassword: EncryptedVaultPayload;
+  wrappedVaultKeyByRecovery: EncryptedVaultPayload;
+  passwordVerifier: EncryptedVaultPayload;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface VaultLoginSecretData {
+  username: string;
+  password: string;
+  url: string;
+  notes: string;
+}
+
+export interface VaultLoginItem {
+  id?: string;
+  type: 'login';
+  title: string;
+  provider: string;
+  favorite: boolean;
+  tags: string[];
+  encryptedPayload: EncryptedVaultPayload;
+  cryptoVersion: number;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface VaultLoginItemInput {
+  title: string;
+  provider: string;
+  favorite: boolean;
+  tags: string[];
+  username: string;
+  password: string;
+  url: string;
+  notes: string;
+}
+
+export interface VaultSessionState {
+  isConfigured: boolean;
+  isUnlocked: boolean;
+  unlockedAt: number | null;
+}
+
 // ── Dynamic Dimension Scores (Firestore: users/{uid}/scores/current) ──
 /** Live scores that decay over time and respond to game choices + actions.
  *  See ScoringService for the math. lastActivity tracks per-dimension dates for decay. */
