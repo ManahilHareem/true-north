@@ -262,12 +262,18 @@ export class VaultCryptoService {
   }
 
   private recoveryKeyToBytes(value: string): Uint8Array {
-    const normalized = value.replace(/-/g, '').trim();
-    return this.base64UrlToBytes(normalized);
+    const normalized = value.replace(/\s+/g, '').trim();
+
+    try {
+      return this.base64UrlToBytes(normalized);
+    } catch {
+      // Legacy fallback for keys formatted with hyphen separators.
+      return this.base64UrlToBytes(normalized.replace(/\./g, '').replace(/-/g, ''));
+    }
   }
 
   private formatRecoveryKey(value: string): string {
-    return value.match(/.{1,4}/g)?.join('-') || value;
+    return value.match(/.{1,4}/g)?.join(' ') || value;
   }
 
   private toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
