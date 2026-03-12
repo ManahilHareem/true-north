@@ -46,21 +46,64 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onObjectFinalized } = require("firebase-functions/v2/storage");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
+const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const Anthropic = require("@anthropic-ai/sdk");
 
 admin.initializeApp();
-const db = admin.firestore();
+const db = getFirestore();
 const storage = admin.storage();
 
 // The only secret this backend needs. Set it with:
 // firebase functions:secrets:set ANTHROPIC_API_KEY
 const ANTHROPIC_API_KEY = defineSecret("ANTHROPIC_API_KEY");
+const {
+  personalizedRespondHandler,
+  runAgentTaskHandler,
+  listAgentsHandler,
+} = require("./src/functions/personalizedRuntime");
 
 // ── Shared Helpers ───────────────────────────────────────────
 
 function getClient() {
   const apiKey = process.env.ANTHROPIC_API_KEY || ANTHROPIC_API_KEY.value();
-  return new Anthropic({ apiKey });
+  return new Anthropic({
+    apiKey,
+    maxRetries: 0,
+    timeout: 45000,
+  });
+}
+
+function toHttpsError(error, fallbackMessage = "LLM request failed") {
+  if (error instanceof HttpsError) return error;
+
+  const status = error?.status;
+  const retryAfter = error?.headers?.["retry-after"];
+  const apiMessage = error?.error?.error?.message || error?.message || fallbackMessage;
+
+  if (status === 429) {
+    const suffix = retryAfter ? ` Retry after ${retryAfter} seconds.` : "";
+    return new HttpsError("resource-exhausted", `${apiMessage}${suffix}`);
+  }
+  if (status === 401 || status === 403) {
+    return new HttpsError("permission-denied", apiMessage);
+  }
+  if (status >= 400 && status < 500) {
+    return new HttpsError("invalid-argument", apiMessage);
+  }
+  return new HttpsError("internal", apiMessage);
+}
+
+async function createAnthropicMessage(params) {
+  try {
+    return await getClient().messages.create(params);
+  } catch (error) {
+    throw toHttpsError(error);
+  }
+}
+
+function truncateText(value, maxChars = 4000) {
+  if (!value || typeof value !== "string") return "";
+  return value.length > maxChars ? `${value.slice(0, maxChars)}...` : value;
 }
 
 /**
@@ -82,8 +125,7 @@ function getClient() {
  * ╚═══════════════════════════════════════════════════════════╝
  */
 async function callClaude(systemPrompt, userMessage, model = "claude-sonnet-4-5-20250929") {
-  const client = getClient();
-  const response = await client.messages.create({
+  const response = await createAnthropicMessage({
     model,
     max_tokens: 4096,
     system: systemPrompt,
@@ -188,7 +230,7 @@ Return ONLY valid JSON:
   "currentEdge": "the one thing most worth watching"
 }`;
     const merged = await callClaudeJSON("You are a memory compactor. Return only valid JSON.", prompt, "claude-haiku-4-5-20251001");
-    merged.lastUpdated = admin.firestore.FieldValue.serverTimestamp();
+    merged.lastUpdated = FieldValue.serverTimestamp();
     await db.collection("users").doc(userId).collection("memory").doc("core").set(merged);
   } catch (e) {
     console.error(`Memory merge failed for ${userId}:`, e);
@@ -454,7 +496,7 @@ function buildDocumentContext(results) {
     : "";
 }
 
-exports.onChatMessage = onCall({ secrets: [ANTHROPIC_API_KEY] }, async (request) => {
+exports.onChatMessage = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 120 }, async (request) => {
   const { userId, agentId, message, threadId } = request.data;
   const [userData, memory] = await Promise.all([getUserData(userId), getMemory(userId)]);
   if (!userData?.profile || !userData?.onboarding) throw new Error("Profile not found");
@@ -503,19 +545,19 @@ Keep them on their highest trajectory. Ask "What would the extraordinary version
   const historyRef = threadId
     ? db.collection("users").doc(userId).collection("chat_history").doc(agentId).collection("threads").doc(threadId).collection("messages")
     : db.collection("users").doc(userId).collection("chat_history").doc(agentId).collection("messages");
-  const historySnap = await historyRef.orderBy("timestamp", "desc").limit(20).get();
+  const historySnap = await historyRef.orderBy("timestamp", "desc").limit(12).get();
 
   const history = historySnap.docs
     .map((d) => d.data())
     .reverse()
-    .map((m) => ({ role: m.role, content: m.content }));
+    .map((m) => ({ role: m.role, content: truncateText(m.content, 2000) }))
+    .filter((m) => m.content);
 
-  history.push({ role: "user", content: message });
+  history.push({ role: "user", content: truncateText(message, 4000) });
 
-  const client = getClient();
-  const response = await client.messages.create({
+  const response = await createAnthropicMessage({
     model: "claude-sonnet-4-5-20250929",
-    max_tokens: 2048,
+    max_tokens: 1024,
     system: systemPrompt,
     messages: history,
   });
@@ -629,7 +671,7 @@ Return ONLY valid JSON:
   // Save to Firestore
   await db.collection("users").doc(userId).collection("call_summaries").add({
     ...summary,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
   });
 
   if (memUpdate) mergeMemory(userId, memory, memUpdate).catch(console.error);
@@ -700,7 +742,7 @@ Return ONLY valid JSON:
 
   await db.collection("users").doc(userId).collection("future_visions").doc("current").set({
     visions,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
   });
 
   // Self-learning: merge memory
@@ -781,7 +823,7 @@ exports.onFinalizeFutures = onCall({ secrets: [ANTHROPIC_API_KEY] }, async (requ
   // Save to Firestore
   await db.collection("users").doc(userId).collection("future_visions").doc("current").set({
     visions,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
   });
 
   // Memory update via Haiku (fast + cheap)
@@ -819,12 +861,11 @@ exports.onGenerateEditionItem = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSe
   const p = userData?.profile || {};
   const o = userData?.onboarding || {};
 
-  const client = getClient();
   const exclusionLine = excl && excl.length > 0 ? `\nEXCLUDE topics about: ${excl.join(", ")}` : "";
   const memoryContext = memory ? `\nPERSISTENT MEMORY:\n${formatMemoryForPrompt(memory)}` : "";
   const profileContext = p.archetypeName ? `\nThe reader's profile: Archetype: ${p.archetypeName}, Strength: ${p.coreStrength}, Career: ${o.careerDirection || "unknown"}, Interests: ${(o.newsTopics || []).join(", ") || "general"}.${memoryContext}\nFind an article that would be especially relevant and meaningful to someone with this profile.` : "";
 
-  const response = await client.messages.create({
+  const response = await createAnthropicMessage({
     model: "claude-sonnet-4-5-20250929",
     max_tokens: 1024,
     tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
@@ -860,7 +901,7 @@ exports.onSaveEdition = onCall(async (request) => {
 
   await db.collection("users").doc(userId).collection("editions").doc(today).set({
     ...edition,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
   });
 
   return edition;
@@ -877,8 +918,7 @@ exports.onGenerateEdition = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSecond
   const topics = o.newsTopics || [];
   const exclusions = o.exclusions || [];
 
-  const client = getClient();
-  const response = await client.messages.create({
+  const response = await createAnthropicMessage({
     model: "claude-sonnet-4-5-20250929",
     max_tokens: 4096,
     tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
@@ -903,7 +943,7 @@ Search the web for relevant current news and articles, then return ONLY a valid 
 
   await db.collection("users").doc(userId).collection("editions").doc(today).set({
     ...edition,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
   });
 
   return edition;
@@ -953,7 +993,7 @@ Return ONLY valid JSON:
     ...extraction,
     transcriptFileUrl: fileUrl,
     fileName,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
   });
 
   // Step 2: Match and update threads
@@ -981,8 +1021,8 @@ Return ONLY valid JSON:
       if (threadDoc.exists) {
         const data = threadDoc.data();
         await threadRef.update({
-          keyEvents: [...(data.keyEvents || []), { transcriptId: extRef.id, summary: ut.newEvent, date: admin.firestore.FieldValue.serverTimestamp() }],
-          lastMentionedAt: admin.firestore.FieldValue.serverTimestamp(),
+          keyEvents: [...(data.keyEvents || []), { transcriptId: extRef.id, summary: ut.newEvent, date: Timestamp.now() }],
+          lastMentionedAt: FieldValue.serverTimestamp(),
         });
       }
     }
@@ -993,12 +1033,12 @@ Return ONLY valid JSON:
         title: nt.title,
         summaryCurrent: nt.summary,
         status: nt.status,
-        keyEvents: [{ transcriptId: extRef.id, summary: nt.summary, date: admin.firestore.FieldValue.serverTimestamp() }],
+        keyEvents: [{ transcriptId: extRef.id, summary: nt.summary, date: Timestamp.now() }],
         openLoops: [],
         nextBestActions: [],
         relatedEntities: [],
-        lastMentionedAt: admin.firestore.FieldValue.serverTimestamp(),
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastMentionedAt: FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
       });
     }
   }
@@ -1088,13 +1128,12 @@ Return ONLY valid JSON:
 Keep each 2-4 sentences. Personal. Grounded. Empowering.`;
 
   // Fetch real headlines via web search in parallel with briefing generation
-  const client = getClient();
   const profileContext = p.archetypeName ? `\nThe reader's profile: Archetype: ${p.archetypeName}, Strength: ${p.coreStrength}, Career: ${o.careerDirection || "unknown"}.` : "";
   const exclusionLine = exclusions ? `\nEXCLUDE topics about: ${exclusions}` : "";
 
   const [briefing, headlinesResponse] = await Promise.all([
     callClaudeJSON("Return only valid JSON.", briefingPrompt),
-    client.messages.create({
+    createAnthropicMessage({
       model: "claude-sonnet-4-5-20250929",
       max_tokens: 2048,
       tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
@@ -1129,7 +1168,7 @@ Return ONLY a valid JSON array (no markdown, no explanation):
   await db.collection("users").doc(userId).collection("daily_briefings").doc(today).set({
     ...fullBriefing,
     date: today,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
   });
 
   if (memUpdate) mergeMemory(userId, memory, memUpdate).catch(console.error);
@@ -1208,7 +1247,7 @@ exports.onNewDay = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 60, co
   // Save entry calibration if first time
   if (entryCalibration) {
     await db.collection("users").doc(userId).collection("game_meta").doc("calibration").set({
-      ...entryCalibration, savedAt: admin.firestore.FieldValue.serverTimestamp(),
+      ...entryCalibration, savedAt: FieldValue.serverTimestamp(),
     });
   }
 
@@ -1336,7 +1375,7 @@ Note: "shadowProgression" is ONLY required for shadow tiles. Omit it for other t
     actions: [],
     yesterdayAnalysis: result.yesterdayAnalysis || "",
     ...(tileType === "shadow" && result.shadowProgression ? { shadowProgression: result.shadowProgression } : {}),
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
   };
 
   // Save game day
@@ -1362,7 +1401,7 @@ Note: "shadowProgression" is ONLY required for shadow tiles. Omit it for other t
         strengths: [],
         agentInsights: {},
         currentEdge: "",
-        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+        lastUpdated: FieldValue.serverTimestamp(),
       }).catch(console.error);
     }
   }
@@ -1524,6 +1563,27 @@ Return ONLY valid JSON:
 // Score updates for action completion happen on the FRONTEND (scoring.service.ts)
 // to keep the UI responsive — this just persists the completion state.
 // ═══════════════════════════════════════════════════════════════
+exports.onPersonalizedRespond = onCall(
+  { secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 60, cors: true },
+  async (request) => personalizedRespondHandler(request, {
+    anthropicSecret: ANTHROPIC_API_KEY,
+    anthropicSecretName: "ANTHROPIC_API_KEY",
+  })
+);
+
+exports.onRunAgentTask = onCall(
+  { secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 60, cors: true },
+  async (request) => runAgentTaskHandler(request, {
+    anthropicSecret: ANTHROPIC_API_KEY,
+    anthropicSecretName: "ANTHROPIC_API_KEY",
+  })
+);
+
+exports.onListAvailableAgents = onCall(
+  { cors: true },
+  async (request) => listAgentsHandler(request)
+);
+
 exports.onCompleteAction = onCall({ cors: true }, async (request) => {
   const { userId, date, actionId } = request.data;
   if (!userId || !date || !actionId) throw new HttpsError("invalid-argument", "userId, date, and actionId are required");
@@ -1534,7 +1594,7 @@ exports.onCompleteAction = onCall({ cors: true }, async (request) => {
 
   const dayData = daySnap.data();
   const actions = (dayData.actions || []).map((a) =>
-    a.id === actionId ? { ...a, completed: true, completedAt: admin.firestore.Timestamp.now() } : a
+    a.id === actionId ? { ...a, completed: true, completedAt: Timestamp.now() } : a
   );
 
   const allDone = actions.every((a) => a.completed);
