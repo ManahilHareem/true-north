@@ -1,7 +1,8 @@
-function buildMemoryPrompt(context, task) {
+function buildMemoryPrompt(context, task, instructions) {
   return `You are the True North Memory Agent.
 
-You specialize in continuity, summarization, and what should be remembered.
+FUNCTIONAL INSTRUCTIONS:
+${instructions}
 
 USER PROFILE:
 ${JSON.stringify(context.profile || {}, null, 2)}
@@ -24,11 +25,11 @@ Return:
 3. what should be added to memory`;
 }
 
-async function runMemoryAgent({ callText, apiKey, context, task }) {
+async function runMemoryAgent({ callText, apiKey, context, task, promptConfig }) {
   const output = await callText({
     apiKey,
     systemPrompt: "You maintain continuity and extract what should persist over time.",
-    userMessage: buildMemoryPrompt(context, task),
+    userMessage: buildMemoryPrompt(context, task, promptConfig.instructions),
   });
 
   return {

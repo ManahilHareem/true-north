@@ -345,6 +345,18 @@ export interface AvailableAgent {
   name: string;
   description: string;
   capabilities: string[];
+  editableLabel?: string;
+  defaultInstructions?: string;
+}
+
+export interface AgentPromptConfig {
+  id: SpecializedAgentType;
+  name: string;
+  description: string;
+  editableLabel: string;
+  instructions: string;
+  defaultInstructions: string;
+  updatedAt?: Timestamp | null;
 }
 
 export interface PersonalizedRespondResult {
@@ -360,6 +372,24 @@ export interface RunAgentTaskResult {
   agentType: SpecializedAgentType;
   evidence: RetrievedEvidence[];
   retrievalStatus: 'ok' | 'empty' | 'degraded';
+}
+
+export interface RuntimeChatThread {
+  id?: string;
+  title: string;
+  createdAt: Timestamp;
+  lastMessageAt: Timestamp;
+}
+
+export interface RuntimeChatMessage {
+  id?: string;
+  role: 'user' | 'assistant';
+  content: string;
+  mode: 'auto' | 'direct';
+  agentType: SpecializedAgentType | 'auto';
+  retrievalStatus?: 'ok' | 'empty' | 'degraded' | '';
+  evidence?: RetrievedEvidence[];
+  timestamp: Timestamp;
 }
 
 // ── Password Vault ──────────────────────────────────────────

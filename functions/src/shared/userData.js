@@ -1,11 +1,17 @@
 const admin = require("firebase-admin");
 const { FieldValue } = require("firebase-admin/firestore");
+const { DEFAULT_AGENT_PROMPTS } = require("../agents/promptConfig");
 
 const db = admin.firestore();
 
 async function getUserProfileBundle(userId) {
   const snap = await db.collection("users").doc(userId).get();
   return snap.exists ? snap.data() : null;
+}
+
+async function getUserRole(userId) {
+  const bundle = await getUserProfileBundle(userId);
+  return bundle && bundle.role ? bundle.role : null;
 }
 
 async function getUserMemory(userId) {
@@ -15,6 +21,24 @@ async function getUserMemory(userId) {
 
 async function getRecentThreadMessages(userId, threadId, limit = 12) {
   if (!threadId) return [];
+
+  const runtimeSnap = await db.collection("users").doc(userId)
+    .collection("runtime_threads").doc(threadId)
+    .collection("messages")
+    .orderBy("timestamp", "desc")
+    .limit(limit)
+    .get();
+
+  if (!runtimeSnap.empty) {
+    return runtimeSnap.docs
+      .map((doc) => doc.data())
+      .reverse()
+      .map((msg) => ({
+        role: msg.role,
+        content: msg.content,
+        agentId: msg.agentType || "auto",
+      }));
+  }
 
   const agentIds = ["financial", "food-medicine", "media", "relationship", "moonshot"];
   const lookups = await Promise.all(
@@ -50,6 +74,57 @@ async function saveResponseLog(userId, payload) {
     ...payload,
     createdAt: FieldValue.serverTimestamp(),
   });
+}
+
+async function saveRuntimeMessage(userId, threadId, payload) {
+  if (!threadId) return;
+
+  await db.collection("users").doc(userId)
+    .collection("runtime_threads").doc(threadId)
+    .collection("messages")
+    .add({
+      ...payload,
+      createdAt: undefined,
+      timestamp: FieldValue.serverTimestamp(),
+    });
+
+  await db.collection("users").doc(userId)
+    .collection("runtime_threads").doc(threadId)
+    .set({
+      lastMessageAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+}
+
+async function getAgentPromptConfigs(userId) {
+  const snap = await db.collection("users").doc(userId)
+    .collection("intelligence_config")
+    .doc("agent_prompts")
+    .get();
+
+  const stored = snap.exists ? snap.data() : {};
+  const result = {};
+
+  Object.keys(DEFAULT_AGENT_PROMPTS).forEach((agentId) => {
+    result[agentId] = {
+      instructions: typeof stored?.[agentId]?.instructions === "string" ? stored[agentId].instructions : "",
+      updatedAt: stored?.[agentId]?.updatedAt || null,
+    };
+  });
+
+  return result;
+}
+
+async function saveAgentPromptConfig(userId, agentId, config) {
+  const ref = db.collection("users").doc(userId)
+    .collection("intelligence_config")
+    .doc("agent_prompts");
+
+  await ref.set({
+    [agentId]: {
+      instructions: config.instructions,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+  }, { merge: true });
 }
 
 async function mergeMemoryUpdate(userId, memoryUpdate, agentId) {
@@ -106,8 +181,12 @@ async function mergeMemoryUpdate(userId, memoryUpdate, agentId) {
 
 module.exports = {
   getUserProfileBundle,
+  getUserRole,
   getUserMemory,
   getRecentThreadMessages,
   saveResponseLog,
+  saveRuntimeMessage,
+  getAgentPromptConfigs,
+  saveAgentPromptConfig,
   mergeMemoryUpdate,
 };

@@ -1,8 +1,8 @@
-function buildRecommendationPrompt(context, task) {
+function buildRecommendationPrompt(context, task, instructions) {
   return `You are the True North Recommendation Agent.
 
-Give recommendations aligned with the user's priorities, patterns, and retrieved evidence.
-Do not recommend anything that conflicts with the known profile without saying why.
+FUNCTIONAL INSTRUCTIONS:
+${instructions}
 
 USER PROFILE:
 ${JSON.stringify(context.profile || {}, null, 2)}
@@ -22,11 +22,11 @@ ${task}
 Return a ranked recommendation list with brief reasoning for each item.`;
 }
 
-async function runRecommendationAgent({ callText, apiKey, context, task }) {
+async function runRecommendationAgent({ callText, apiKey, context, task, promptConfig }) {
   const output = await callText({
     apiKey,
     systemPrompt: "You give aligned recommendations rooted in known user context.",
-    userMessage: buildRecommendationPrompt(context, task),
+    userMessage: buildRecommendationPrompt(context, task, promptConfig.instructions),
   });
 
   return {

@@ -1,8 +1,8 @@
-function buildResearchPrompt(context, task) {
+function buildResearchPrompt(context, task, instructions) {
   return `You are the True North Research Agent.
 
-You synthesize what is already known internally and structure the answer like research notes.
-Do not claim you performed external browsing unless it is explicitly provided in the context.
+FUNCTIONAL INSTRUCTIONS:
+${instructions}
 
 USER PROFILE:
 ${JSON.stringify(context.profile || {}, null, 2)}
@@ -22,11 +22,11 @@ Return:
 3. what is still unknown`;
 }
 
-async function runResearchAgent({ callText, apiKey, context, task }) {
+async function runResearchAgent({ callText, apiKey, context, task, promptConfig }) {
   const output = await callText({
     apiKey,
     systemPrompt: "You are a structured research synthesizer. Be explicit about knowns and unknowns.",
-    userMessage: buildResearchPrompt(context, task),
+    userMessage: buildResearchPrompt(context, task, promptConfig.instructions),
   });
 
   return {

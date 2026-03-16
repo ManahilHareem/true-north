@@ -57,8 +57,10 @@ const storage = admin.storage();
 // firebase functions:secrets:set ANTHROPIC_API_KEY
 const ANTHROPIC_API_KEY = defineSecret("ANTHROPIC_API_KEY");
 const {
+  getAgentPromptConfigsHandler,
   personalizedRespondHandler,
   runAgentTaskHandler,
+  saveAgentPromptConfigHandler,
   listAgentsHandler,
 } = require("./src/functions/personalizedRuntime");
 
@@ -1582,6 +1584,16 @@ exports.onRunAgentTask = onCall(
 exports.onListAvailableAgents = onCall(
   { cors: true },
   async (request) => listAgentsHandler(request)
+);
+
+exports.onGetAgentPromptConfigs = onCall(
+  { cors: true },
+  async (request) => getAgentPromptConfigsHandler(request)
+);
+
+exports.onSaveAgentPromptConfig = onCall(
+  { cors: true },
+  async (request) => saveAgentPromptConfigHandler(request)
 );
 
 exports.onCompleteAction = onCall({ cors: true }, async (request) => {

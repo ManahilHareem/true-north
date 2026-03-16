@@ -1,10 +1,11 @@
 const { HttpsError } = require("firebase-functions/v2/https");
-const { requireUserAccess } = require("../auth/requireUserAccess");
+const { requireFounderAccess, requireUserAccess } = require("../auth/requireUserAccess");
 const { callText } = require("../shared/anthropic");
 const { buildPersonalizedContext } = require("../context/personalizedContextBuilder");
 const { runOrchestrator } = require("../orchestration/orchestrator");
 const { listAgents } = require("../agents/registry");
-const { mergeMemoryUpdate, saveResponseLog } = require("../shared/userData");
+const { getAgentPromptConfigs, mergeMemoryUpdate, saveAgentPromptConfig, saveResponseLog, saveRuntimeMessage } = require("../shared/userData");
+const { getAgent, listAgents: listAgentDefinitions } = require("../agents/registry");
 
 function getSecretValue(secret, secretName) {
   try {
@@ -28,6 +29,7 @@ async function personalizedRespondHandler(request, deps) {
     threadId: request.data.threadId,
     embeddingServiceUrl: process.env.EMBEDDING_SERVICE_URL || "http://127.0.0.1:8000",
   });
+  const agentPromptConfigs = await getAgentPromptConfigs(userId);
 
   const result = await runOrchestrator({
     mode: request.data.mode || "auto",
@@ -36,6 +38,7 @@ async function personalizedRespondHandler(request, deps) {
     context,
     callText,
     apiKey: getSecretValue(deps.anthropicSecret, deps.anthropicSecretName),
+    agentPromptConfigs,
   });
 
   const memoryPromise = mergeMemoryUpdate(userId, result.memoryUpdate, result.selectedAgent).catch((error) => {
@@ -49,6 +52,15 @@ async function personalizedRespondHandler(request, deps) {
     retrievalStatus: context.retrievalStatus,
     evidenceCount: context.evidence.length,
     task: message,
+  });
+
+  await saveRuntimeMessage(userId, request.data.threadId, {
+    role: "assistant",
+    content: result.output,
+    mode: request.data.mode || "auto",
+    agentType: result.selectedAgent,
+    retrievalStatus: context.retrievalStatus,
+    evidence: result.citations,
   });
 
   memoryPromise.catch(() => undefined);
@@ -77,6 +89,7 @@ async function runAgentTaskHandler(request, deps) {
     threadId: request.data.threadId,
     embeddingServiceUrl: process.env.EMBEDDING_SERVICE_URL || "http://127.0.0.1:8000",
   });
+  const agentPromptConfigs = await getAgentPromptConfigs(userId);
 
   const result = await runOrchestrator({
     mode: "direct",
@@ -85,6 +98,7 @@ async function runAgentTaskHandler(request, deps) {
     context,
     callText,
     apiKey: getSecretValue(deps.anthropicSecret, deps.anthropicSecretName),
+    agentPromptConfigs,
   });
 
   const memoryPromise = mergeMemoryUpdate(userId, result.memoryUpdate, result.selectedAgent).catch((error) => {
@@ -98,6 +112,15 @@ async function runAgentTaskHandler(request, deps) {
     retrievalStatus: context.retrievalStatus,
     evidenceCount: context.evidence.length,
     task,
+  });
+
+  await saveRuntimeMessage(userId, request.data.threadId, {
+    role: "assistant",
+    content: result.output,
+    mode: "direct",
+    agentType: result.selectedAgent,
+    retrievalStatus: context.retrievalStatus,
+    evidence: result.citations,
   });
 
   memoryPromise.catch(() => undefined);
@@ -115,8 +138,44 @@ async function listAgentsHandler(request) {
   return { agents: listAgents() };
 }
 
+async function getAgentPromptConfigsHandler(request) {
+  const userId = await requireFounderAccess(request);
+  const stored = await getAgentPromptConfigs(userId);
+  const prompts = listAgentDefinitions().map((agent) => ({
+    id: agent.id,
+    name: agent.name,
+    description: agent.description,
+    editableLabel: agent.editableLabel,
+    instructions: stored[agent.id]?.instructions || agent.defaultInstructions,
+    defaultInstructions: agent.defaultInstructions,
+    updatedAt: stored[agent.id]?.updatedAt || null,
+  }));
+
+  return { prompts };
+}
+
+async function saveAgentPromptConfigHandler(request) {
+  const userId = await requireFounderAccess(request);
+  const agentId = String(request.data.agentId || "").trim();
+  const instructions = String(request.data.instructions || "").trim();
+
+  if (!agentId || !instructions) {
+    throw new HttpsError("invalid-argument", "agentId and instructions are required.");
+  }
+
+  if (!getAgent(agentId)) {
+    throw new HttpsError("not-found", "Unknown agent.");
+  }
+
+  await saveAgentPromptConfig(userId, agentId, { instructions });
+
+  return { success: true };
+}
+
 module.exports = {
+  getAgentPromptConfigsHandler,
   personalizedRespondHandler,
   runAgentTaskHandler,
+  saveAgentPromptConfigHandler,
   listAgentsHandler,
 };

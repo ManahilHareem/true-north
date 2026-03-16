@@ -1,4 +1,5 @@
 const { HttpsError } = require("firebase-functions/v2/https");
+const { getUserRole } = require("../shared/userData");
 
 function requireUserAccess(request) {
   const authUid = request.auth && request.auth.uid;
@@ -19,4 +20,15 @@ function requireUserAccess(request) {
   return authUid;
 }
 
-module.exports = { requireUserAccess };
+async function requireFounderAccess(request) {
+  const userId = requireUserAccess(request);
+  const role = await getUserRole(userId);
+
+  if (role !== "founder" && role !== "admin") {
+    throw new HttpsError("permission-denied", "Founder or admin access is required.");
+  }
+
+  return userId;
+}
+
+module.exports = { requireUserAccess, requireFounderAccess };

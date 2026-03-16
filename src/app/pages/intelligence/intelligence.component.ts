@@ -12,18 +12,23 @@
  * This is the most complex data page. It manages relationships between
  * transcripts, threads, entities, decisions, and open loops.
  */
-import { Component, inject, NgZone, OnInit } from '@angular/core';
+import { AfterViewChecked, Component, ElementRef, ViewChild, inject, NgZone, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
+import { Timestamp } from '@angular/fire/firestore';
 import { AuthService } from '../../services/auth.service';
 import { UserDataService } from '../../services/user-data.service';
 import { ApiService } from '../../services/api.service';
 import { EmbeddingSearchResult, EmbeddingService } from '../../services/embedding.service';
 import { ThemeService } from '../../services/theme.service';
 import {
+  AgentPromptConfig,
   AvailableAgent,
   PersonalizedRespondResult,
+  RetrievedEvidence,
+  RuntimeChatMessage,
+  RuntimeChatThread,
   RunAgentTaskResult,
   SpecializedAgentType,
   TranscriptExtraction,
@@ -68,7 +73,7 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
             <div class="brief-header" (click)="expandedBrief = expandedBrief === ext.id ? null : ext.id">
               <div>
                 <h4>{{ ext.fileName }}</h4>
-                <span class="brief-date">{{ ext.createdAt?.toDate ? (ext.createdAt.toDate() | date:'mediumDate') : '' }}</span>
+                <span class="brief-date">{{ ext.createdAt.toDate() | date:'mediumDate' }}</span>
               </div>
               <span class="expand-arrow">{{ expandedBrief === ext.id ? '▼' : '▶' }}</span>
             </div>
@@ -139,7 +144,7 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
             </div>
             <p class="thread-summary">{{ t.summaryCurrent }}</p>
             <div class="thread-meta">
-              <span *ngIf="t.lastMentionedAt">Last mentioned: {{ t.lastMentionedAt?.toDate ? (t.lastMentionedAt.toDate() | date:'mediumDate') : '' }}</span>
+              <span *ngIf="t.lastMentionedAt">Last mentioned: {{ t.lastMentionedAt.toDate() | date:'mediumDate' }}</span>
             </div>
             <div *ngIf="t.openLoops.length" class="thread-loops">
               <span class="loop-label">Open loops:</span>
@@ -223,6 +228,24 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
         <div *ngIf="activeTab === 'Agents'" class="tab-content animate-fade">
           <p class="query-desc">Run the new personalized runtime in auto mode or invoke a specialized agent directly with retrieved document context.</p>
 
+          <div class="agent-toolbar" *ngIf="selectedPromptConfig">
+            <button class="btn-ghost" (click)="startNewRuntimeThread()">+ New Chat</button>
+            <button class="btn-ghost" (click)="openPromptEditor()">
+              Edit {{ selectedPromptConfig.name }} Prompt
+            </button>
+          </div>
+
+          <div class="runtime-thread-strip" *ngIf="runtimeThreads.length">
+            <div
+              *ngFor="let thread of runtimeThreads"
+              class="thread-pill"
+              [class.active]="thread.id === activeRuntimeThreadId"
+              (click)="switchRuntimeThread(thread)">
+              <span>{{ thread.title }}</span>
+              <button class="thread-delete" (click)="deleteRuntimeThread(thread, $event)" aria-label="Delete thread">×</button>
+            </div>
+          </div>
+
           <div *ngIf="agentCatalog.length" class="agent-grid">
             <button
               *ngFor="let agent of agentCatalog"
@@ -242,31 +265,60 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
             <button class="tab" [class.active]="agentMode === 'direct'" (click)="agentMode = 'direct'">Direct Agent</button>
           </div>
 
-          <div class="query-input-area">
-            <textarea [(ngModel)]="agentTask" placeholder="Ask the personalized runtime a question or give a task to a specific agent…" rows="3"></textarea>
-            <button class="btn-primary" (click)="runAgentFlow()" [disabled]="!agentTask.trim() || agentLoading">
-              {{ agentLoading ? 'Running...' : (agentMode === 'auto' ? 'Run Runtime' : 'Run Agent') }}
-            </button>
+          <div class="runtime-chat card">
+            <div class="runtime-messages" #runtimeMessagesArea>
+              <div *ngIf="runtimeMessages.length === 0" class="empty-state runtime-empty">
+                <p>Start a conversation with the selected agent or let Auto Route choose for you.</p>
+              </div>
+
+              <div *ngFor="let msg of runtimeMessages" class="runtime-msg-row" [class.user]="msg.role === 'user'" [class.assistant]="msg.role === 'assistant'">
+                <div class="runtime-msg-bubble" [class.user-bubble]="msg.role === 'user'" [class.ai-bubble]="msg.role === 'assistant'">
+                  <div *ngIf="msg.role === 'assistant'" class="runtime-msg-meta">
+                    <span>{{ msg.agentType === 'auto' ? 'auto' : msg.agentType }}</span>
+                    <span *ngIf="msg.retrievalStatus">retrieval {{ msg.retrievalStatus }}</span>
+                  </div>
+                  <div class="response-text" [innerHTML]="formatResponse(msg.content)"></div>
+                </div>
+              </div>
+
+              <div *ngIf="agentLoading" class="runtime-msg-row assistant">
+                <div class="runtime-msg-bubble ai-bubble typing-bubble">
+                  <div class="typing-shimmer shimmer"></div>
+                  <div class="typing-status">Thinking through the conversation…</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="runtime-input-row">
+              <textarea
+                [(ngModel)]="agentTask"
+                placeholder="Message the runtime..."
+                rows="3"
+                (keydown.enter)="onRuntimeEnter($event)"></textarea>
+              <button class="btn-primary" (click)="runAgentFlow()" [disabled]="!agentTask.trim() || agentLoading">
+                {{ agentLoading ? 'Running...' : 'Send' }}
+              </button>
+            </div>
           </div>
 
           <div *ngIf="agentError" class="error-banner">{{ agentError }}</div>
 
-          <div *ngIf="agentResponseText" class="query-response card animate-fade">
+          <div *ngIf="latestAssistantMessage" class="query-response card animate-fade">
             <div class="agent-response-header">
               <div>
-                <h4>{{ agentMode === 'auto' ? 'Personalized Runtime Response' : 'Agent Response' }}</h4>
+                <h4>Latest Agent Response</h4>
                 <span class="result-meta">
-                  {{ activeAgentLabel }} · retrieval {{ retrievalStatus || 'unknown' }}
+                  {{ latestAssistantMessage.agentType }} · retrieval {{ latestAssistantMessage.retrievalStatus || 'unknown' }}
                   <span *ngIf="memoryUpdateQueued !== null"> · memory {{ memoryUpdateQueued ? 'queued' : 'not queued' }}</span>
                 </span>
               </div>
             </div>
-            <div class="response-text" [innerHTML]="formatResponse(agentResponseText)"></div>
+            <div class="response-text" [innerHTML]="formatResponse(latestAssistantMessage.content)"></div>
           </div>
 
-          <div *ngIf="agentEvidence.length" class="evidence-list">
+          <div *ngIf="latestAssistantEvidence.length" class="evidence-list">
             <h5>Retrieved Evidence</h5>
-            <div *ngFor="let evidence of agentEvidence" class="evidence-card card">
+            <div *ngFor="let evidence of latestAssistantEvidence" class="evidence-card card">
               <div class="search-result-header">
                 <div>
                   <h4>{{ evidence.sourceName }}</h4>
@@ -275,6 +327,32 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
               </div>
               <p class="search-result-text">{{ evidence.text }}</p>
             </div>
+          </div>
+        </div>
+
+        <div *ngIf="showPromptModal && selectedPromptConfig" class="prompt-modal-backdrop" (click)="closePromptEditor()">
+          <div class="prompt-modal card" (click)="$event.stopPropagation()">
+            <div class="agent-response-header">
+              <div>
+                <h4>Agent Prompt Settings</h4>
+                <span class="result-meta">{{ selectedPromptConfig.name }} · founder/admin editable</span>
+              </div>
+              <button class="btn-ghost" (click)="closePromptEditor()">Close</button>
+            </div>
+            <p class="prompt-editor-copy">Only the functional instructions are editable here. Profile, memory, retrieved evidence, and thread context stay hidden in the backend.</p>
+            <label class="prompt-label">{{ selectedPromptConfig.editableLabel }}</label>
+            <textarea
+              [(ngModel)]="promptDraft"
+              rows="9"
+              placeholder="Describe what this agent should do and how it should respond..."></textarea>
+            <div class="prompt-editor-actions">
+              <button class="btn-primary" (click)="saveSelectedPrompt()" [disabled]="!promptDraft.trim() || promptSaving">
+                {{ promptSaving ? 'Saving...' : 'Save Prompt' }}
+              </button>
+              <button class="btn-ghost" (click)="resetSelectedPrompt()">Reset to Default</button>
+            </div>
+            <div *ngIf="promptError" class="error-banner">{{ promptError }}</div>
+            <p *ngIf="promptSavedMessage" class="prompt-saved">{{ promptSavedMessage }}</p>
           </div>
         </div>
       </div>
@@ -411,7 +489,134 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
       font-size: 0.72rem; padding: 3px 8px; border-radius: 100px; background: var(--accent-soft);
       color: var(--accent-primary); text-transform: uppercase; letter-spacing: 0.06em;
     }
+    .agent-toolbar { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+    .runtime-thread-strip { display: flex; gap: 8px; overflow-x: auto; margin-bottom: 14px; padding-bottom: 4px; }
+    .thread-pill {
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-surface);
+      color: var(--text-secondary);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 0.8rem;
+      white-space: nowrap;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .thread-pill.active {
+      border-color: var(--accent-primary);
+      background: var(--accent-soft);
+      color: var(--accent-primary);
+    }
+    .thread-delete {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(255,255,255,0.08);
+      color: inherit;
+      cursor: pointer;
+      line-height: 1;
+      font-size: 0.85rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+    .thread-delete:hover { background: rgba(231,76,60,0.2); color: #e74c3c; }
     .mode-toggle { display: flex; gap: 8px; margin-bottom: 16px; }
+    .runtime-chat { margin-bottom: 18px; padding: 0; overflow: hidden; }
+    .runtime-messages {
+      min-height: 320px;
+      max-height: 520px;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: rgba(0, 0, 0, 0.08);
+    }
+    .runtime-empty { padding: 48px 20px; }
+    .runtime-msg-row { display: flex; }
+    .runtime-msg-row.user { justify-content: flex-end; }
+    .runtime-msg-row.assistant { justify-content: flex-start; }
+    .runtime-msg-bubble {
+      max-width: 78%;
+      border-radius: 18px;
+      padding: 12px 16px;
+    }
+    .user-bubble {
+      background: var(--accent-primary);
+      color: var(--bg-deep);
+      border-bottom-right-radius: 4px;
+    }
+    .ai-bubble {
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      border: 1px solid var(--border-subtle);
+      border-bottom-left-radius: 4px;
+    }
+    .runtime-msg-meta {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 6px;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+    }
+    .typing-bubble { min-width: 160px; }
+    .typing-shimmer { height: 14px; border-radius: 7px; width: 100%; }
+    .typing-status { font-size: 0.75rem; color: var(--text-muted); margin-top: 8px; }
+    .runtime-input-row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+      padding: 16px;
+      border-top: 1px solid var(--border-subtle);
+      background: var(--bg-base);
+    }
+    .runtime-input-row textarea {
+      flex: 1;
+      min-height: 68px;
+    }
+    .prompt-editor-copy { margin-bottom: 12px; }
+    .prompt-label {
+      display: block;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+    .prompt-editor textarea {
+      width: 100%;
+      min-height: 180px;
+      margin-bottom: 12px;
+    }
+    .prompt-editor-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .prompt-saved { color: #2A9D8F; font-size: 0.85rem; margin-top: 10px; }
+    .prompt-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(6, 8, 14, 0.72);
+      backdrop-filter: blur(10px);
+    }
+    .prompt-modal {
+      width: min(760px, 100%);
+      max-height: calc(100vh - 40px);
+      overflow: auto;
+      padding: 22px;
+      border: 1px solid var(--border-accent);
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+    }
     .evidence-list { margin-top: 18px; }
     .evidence-list h5 {
       font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px;
@@ -419,9 +624,18 @@ import { FileIngestionComponent } from '../../components/file-ingestion/file-ing
 
     .empty-state { text-align: center; padding: 60px 20px; }
     .empty-state p { color: var(--text-muted); }
+    @media (max-width: 720px) {
+      .prompt-editor-actions { flex-direction: column; }
+      .prompt-editor-actions button { width: 100%; }
+      .runtime-msg-bubble { max-width: 90%; }
+      .runtime-input-row { flex-direction: column; }
+      .runtime-input-row button { width: 100%; }
+    }
   `],
 })
-export class IntelligenceComponent implements OnInit {
+export class IntelligenceComponent implements OnInit, AfterViewChecked {
+  @ViewChild('runtimeMessagesArea') runtimeMessagesArea?: ElementRef<HTMLDivElement>;
+
   private auth = inject(AuthService);
   private userData = inject(UserDataService);
   private api = inject(ApiService);
@@ -449,8 +663,17 @@ export class IntelligenceComponent implements OnInit {
   searchError = '';
   searchResults: EmbeddingSearchResult[] = [];
   agentCatalog: AvailableAgent[] = [];
+  agentPromptConfigs: Partial<Record<SpecializedAgentType, AgentPromptConfig>> = {};
+  runtimeThreads: RuntimeChatThread[] = [];
+  runtimeMessages: RuntimeChatMessage[] = [];
+  activeRuntimeThreadId: string | null = null;
   agentMode: 'auto' | 'direct' = 'auto';
   selectedAgent: SpecializedAgentType = 'knowledge';
+  showPromptModal = false;
+  promptDraft = '';
+  promptSaving = false;
+  promptError = '';
+  promptSavedMessage = '';
   agentTask = '';
   agentLoading = false;
   agentError = '';
@@ -459,6 +682,7 @@ export class IntelligenceComponent implements OnInit {
   memoryUpdateQueued: boolean | null = null;
   activeAgentLabel = 'knowledge';
   agentEvidence: { sourceName: string; sourceType: string; text: string; score: number }[] = [];
+  private shouldScrollRuntime = false;
 
   queryExamples = [
     'What are the top open loops?',
@@ -486,10 +710,27 @@ export class IntelligenceComponent implements OnInit {
     this.people = await this.userData.getAllEntities(userId);
     this.people = this.people.filter((e) => e.type === 'person');
     const { agents } = await this.api.listAvailableAgents(userId);
+    const { prompts } = await this.api.getAgentPromptConfigs(userId);
+    this.runtimeThreads = await this.userData.getRuntimeThreads(userId);
     this.agentCatalog = agents;
+    this.agentPromptConfigs = prompts.reduce((acc, prompt) => {
+      acc[prompt.id] = prompt;
+      return acc;
+    }, {} as Partial<Record<SpecializedAgentType, AgentPromptConfig>>);
     if (agents.length > 0) {
       this.selectedAgent = agents[0].id;
       this.activeAgentLabel = agents[0].id;
+      this.promptDraft = this.agentPromptConfigs[agents[0].id]?.instructions || '';
+    }
+    if (this.runtimeThreads.length > 0 && this.runtimeThreads[0].id) {
+      await this.switchRuntimeThread(this.runtimeThreads[0]);
+    }
+  }
+
+  ngAfterViewChecked() {
+    if (this.shouldScrollRuntime && this.runtimeMessagesArea) {
+      this.runtimeMessagesArea.nativeElement.scrollTop = this.runtimeMessagesArea.nativeElement.scrollHeight;
+      this.shouldScrollRuntime = false;
     }
   }
 
@@ -555,30 +796,130 @@ export class IntelligenceComponent implements OnInit {
   selectAgent(agentId: SpecializedAgentType) {
     this.selectedAgent = agentId;
     this.activeAgentLabel = agentId;
+    this.promptDraft = this.agentPromptConfigs[agentId]?.instructions || '';
+    this.promptError = '';
+    this.promptSavedMessage = '';
+  }
+
+  async startNewRuntimeThread() {
+    this.activeRuntimeThreadId = null;
+    this.runtimeMessages = [];
+    this.agentTask = '';
+    this.agentError = '';
+    this.memoryUpdateQueued = null;
+    this.shouldScrollRuntime = true;
+  }
+
+  async switchRuntimeThread(thread: RuntimeChatThread) {
+    if (!thread.id) return;
+    const userId = this.auth.getCurrentUserId();
+    if (!userId) return;
+
+    const messages = await this.userData.getRuntimeMessages(userId, thread.id);
+    this.zone.run(() => {
+      this.activeRuntimeThreadId = thread.id!;
+      this.runtimeMessages = messages;
+      this.agentError = '';
+      this.shouldScrollRuntime = true;
+    });
+  }
+
+  async deleteRuntimeThread(thread: RuntimeChatThread, event: Event) {
+    event.stopPropagation();
+    if (!thread.id) return;
+
+    const userId = this.auth.getCurrentUserId();
+    if (!userId) return;
+
+    try {
+      await this.userData.deleteRuntimeThread(userId, thread.id);
+      const threads = await this.userData.getRuntimeThreads(userId);
+      this.zone.run(() => {
+        this.runtimeThreads = threads;
+        if (this.activeRuntimeThreadId === thread.id) {
+          this.activeRuntimeThreadId = null;
+          this.runtimeMessages = [];
+          this.memoryUpdateQueued = null;
+        }
+      });
+      if (threads.length > 0 && !this.activeRuntimeThreadId && threads[0].id) {
+        await this.switchRuntimeThread(threads[0]);
+      }
+    } catch (error) {
+      console.error(error);
+      this.zone.run(() => {
+        this.agentError = 'Could not delete chat thread.';
+      });
+    }
+  }
+
+  openPromptEditor() {
+    this.promptDraft = this.selectedPromptConfig?.instructions || '';
+    this.promptError = '';
+    this.promptSavedMessage = '';
+    this.showPromptModal = true;
+  }
+
+  closePromptEditor() {
+    this.showPromptModal = false;
+  }
+
+  get selectedPromptConfig(): AgentPromptConfig | null {
+    return this.agentPromptConfigs[this.selectedAgent] || null;
   }
 
   async runAgentFlow() {
     const userId = this.auth.getCurrentUserId();
     if (!userId || !this.agentTask.trim()) return;
 
+    const messageText = this.agentTask.trim();
+    let threadId = this.activeRuntimeThreadId;
+    if (!threadId) {
+      threadId = await this.userData.createRuntimeThread(userId, this.titleFromMessage(messageText));
+      this.activeRuntimeThreadId = threadId;
+      this.runtimeThreads = await this.userData.getRuntimeThreads(userId);
+    }
+
+    const userMessage: RuntimeChatMessage = {
+      role: 'user',
+      content: messageText,
+      mode: this.agentMode,
+      agentType: this.agentMode === 'auto' ? 'auto' : this.selectedAgent,
+      retrievalStatus: '',
+      evidence: [],
+      timestamp: Timestamp.now(),
+    };
+
+    await this.userData.saveRuntimeMessage(userId, threadId, {
+      role: userMessage.role,
+      content: userMessage.content,
+      mode: userMessage.mode,
+      agentType: userMessage.agentType,
+      retrievalStatus: userMessage.retrievalStatus,
+      evidence: userMessage.evidence,
+    });
+
     this.agentLoading = true;
     this.agentError = '';
-    this.agentResponseText = '';
-    this.agentEvidence = [];
     this.retrievalStatus = '';
     this.memoryUpdateQueued = null;
+    this.runtimeMessages = [...this.runtimeMessages, userMessage];
+    this.agentTask = '';
+    this.shouldScrollRuntime = true;
 
     try {
       if (this.agentMode === 'auto') {
-        const result = await this.api.personalizedRespond(userId, this.agentTask, {
+        const result = await this.api.personalizedRespond(userId, messageText, {
           mode: 'auto',
           preferredAgent: this.selectedAgent,
+          threadId,
         });
         this.applyPersonalizedResult(result);
       } else {
-        const result = await this.api.runAgentTask(userId, this.selectedAgent, this.agentTask);
+        const result = await this.api.runAgentTask(userId, this.selectedAgent, messageText, { threadId });
         this.applyAgentTaskResult(result);
       }
+      this.runtimeThreads = await this.userData.getRuntimeThreads(userId);
     } catch (error) {
       console.error(error);
       this.zone.run(() => {
@@ -590,24 +931,102 @@ export class IntelligenceComponent implements OnInit {
 
   private applyPersonalizedResult(result: PersonalizedRespondResult) {
     this.zone.run(() => {
-      this.agentResponseText = result.response;
+      const assistantMessage: RuntimeChatMessage = {
+        role: 'assistant',
+        content: result.response,
+        mode: 'auto',
+        agentType: result.selectedAgent,
+        retrievalStatus: result.retrievalStatus,
+        evidence: result.evidence,
+        timestamp: Timestamp.now(),
+      };
+      this.runtimeMessages = [...this.runtimeMessages, assistantMessage];
       this.activeAgentLabel = result.selectedAgent;
       this.retrievalStatus = result.retrievalStatus;
       this.memoryUpdateQueued = result.memoryUpdateQueued;
       this.agentEvidence = result.evidence;
       this.agentLoading = false;
+      this.shouldScrollRuntime = true;
     });
   }
 
   private applyAgentTaskResult(result: RunAgentTaskResult) {
     this.zone.run(() => {
-      this.agentResponseText = result.result;
+      const assistantMessage: RuntimeChatMessage = {
+        role: 'assistant',
+        content: result.result,
+        mode: 'direct',
+        agentType: result.agentType,
+        retrievalStatus: result.retrievalStatus,
+        evidence: result.evidence,
+        timestamp: Timestamp.now(),
+      };
+      this.runtimeMessages = [...this.runtimeMessages, assistantMessage];
       this.activeAgentLabel = result.agentType;
       this.retrievalStatus = result.retrievalStatus;
       this.memoryUpdateQueued = null;
       this.agentEvidence = result.evidence;
       this.agentLoading = false;
+      this.shouldScrollRuntime = true;
     });
+  }
+
+  get latestAssistantMessage(): RuntimeChatMessage | null {
+    return [...this.runtimeMessages].reverse().find((msg) => msg.role === 'assistant') || null;
+  }
+
+  get latestAssistantEvidence(): RetrievedEvidence[] {
+    return this.latestAssistantMessage?.evidence || [];
+  }
+
+  resetSelectedPrompt() {
+    const current = this.selectedPromptConfig;
+    if (!current) return;
+    this.promptDraft = current.defaultInstructions;
+    this.promptError = '';
+    this.promptSavedMessage = 'Prompt reset locally. Save to apply it.';
+  }
+
+  async saveSelectedPrompt() {
+    const userId = this.auth.getCurrentUserId();
+    const current = this.selectedPromptConfig;
+    if (!userId || !current || !this.promptDraft.trim()) return;
+
+    this.promptSaving = true;
+    this.promptError = '';
+    this.promptSavedMessage = '';
+
+    try {
+      await this.api.saveAgentPromptConfig(userId, current.id, this.promptDraft.trim());
+      this.zone.run(() => {
+        this.agentPromptConfigs[current.id] = {
+          ...current,
+          instructions: this.promptDraft.trim(),
+        };
+        this.promptSaving = false;
+        this.showPromptModal = false;
+        this.promptSavedMessage = 'Prompt saved. Future agent runs will use the updated instructions.';
+      });
+    } catch (error) {
+      console.error(error);
+      this.zone.run(() => {
+        this.promptSaving = false;
+        this.promptError = 'Could not save prompt settings.';
+      });
+    }
+  }
+
+  onRuntimeEnter(event: Event) {
+    const keyboardEvent = event as KeyboardEvent;
+    if (keyboardEvent.shiftKey) return;
+    event.preventDefault();
+    this.runAgentFlow();
+  }
+
+  private titleFromMessage(message: string): string {
+    const clean = message.replace(/\s+/g, ' ').trim();
+    const words = clean.split(' ').slice(0, 6).join(' ');
+    return words || 'New runtime chat';
   }
 
   getEntityIcon(type: string): string {

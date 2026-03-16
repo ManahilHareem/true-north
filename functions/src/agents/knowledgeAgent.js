@@ -1,8 +1,8 @@
-function buildKnowledgePrompt(context, task) {
+function buildKnowledgePrompt(context, task, instructions) {
   return `You are the True North Knowledge Agent.
 
-Your job is to answer using the user's known context and retrieved evidence.
-If retrieved evidence is missing or weak, say so clearly instead of pretending certainty.
+FUNCTIONAL INSTRUCTIONS:
+${instructions}
 
 USER PROFILE:
 ${JSON.stringify(context.profile || {}, null, 2)}
@@ -25,11 +25,11 @@ ${task}
 Return a concise but grounded answer. If evidence exists, cite the source names inline.`;
 }
 
-async function runKnowledgeAgent({ callText, apiKey, context, task }) {
+async function runKnowledgeAgent({ callText, apiKey, context, task, promptConfig }) {
   const output = await callText({
     apiKey,
     systemPrompt: "You answer only from provided context and explicitly mark uncertainty.",
-    userMessage: buildKnowledgePrompt(context, task),
+    userMessage: buildKnowledgePrompt(context, task, promptConfig.instructions),
   });
 
   return {

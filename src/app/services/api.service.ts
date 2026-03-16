@@ -14,7 +14,7 @@
  */
 import { Injectable, inject, Injector, runInInjectionContext } from '@angular/core';
 import { Functions, httpsCallable } from '@angular/fire/functions';
-import { AvailableAgent, PersonalizedRespondResult, RunAgentTaskResult, SpecializedAgentType } from '../models/interfaces';
+import { AgentPromptConfig, AvailableAgent, PersonalizedRespondResult, RunAgentTaskResult, SpecializedAgentType } from '../models/interfaces';
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
@@ -133,5 +133,13 @@ export class ApiService {
 
   async listAvailableAgents(userId: string): Promise<{ agents: AvailableAgent[] }> {
     return this.call('onListAvailableAgents', { userId });
+  }
+
+  async getAgentPromptConfigs(userId: string): Promise<{ prompts: AgentPromptConfig[] }> {
+    return this.call('onGetAgentPromptConfigs', { userId });
+  }
+
+  async saveAgentPromptConfig(userId: string, agentId: SpecializedAgentType, instructions: string): Promise<{ success: boolean }> {
+    return this.call('onSaveAgentPromptConfig', { userId, agentId, instructions });
   }
 }

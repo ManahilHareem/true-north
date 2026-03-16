@@ -36,7 +36,7 @@ import {
   LexiconItem, DailyBriefing, FutureVision, Edition, TranscriptExtraction,
   Thread, UploadedFile, ReframeAnalysis, Feedback, AgentId,
   UserMemory, DimensionScores, GameDay, DaySnapshot, TodoItem,
-  CoherenceMetrics, EntryCalibration, VaultConfig, VaultLoginItem
+  CoherenceMetrics, EntryCalibration, RuntimeChatMessage, RuntimeChatThread, VaultConfig, VaultLoginItem
 } from '../models/interfaces';
 
 @Injectable({ providedIn: 'root' })
@@ -157,6 +157,71 @@ export class UserDataService {
   async deleteVaultItem(userId: string, itemId: string): Promise<void> {
     await this.firestoreCall(() =>
       deleteDoc(doc(this.firestore, 'users', userId, 'vault', 'config', 'items', itemId))
+    );
+  }
+
+  // ── Runtime Chat Threads ──────────────────────────────────
+  async getRuntimeThreads(userId: string): Promise<RuntimeChatThread[]> {
+    const snap = await this.firestoreCall(() => {
+      const q = query(
+        collection(this.firestore, 'users', userId, 'runtime_threads'),
+        orderBy('lastMessageAt', 'desc')
+      );
+      return getDocs(q);
+    });
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as RuntimeChatThread));
+  }
+
+  async createRuntimeThread(userId: string, title: string): Promise<string> {
+    const docRef = await this.firestoreCall(() =>
+      addDoc(collection(this.firestore, 'users', userId, 'runtime_threads'), {
+        title,
+        createdAt: serverTimestamp(),
+        lastMessageAt: serverTimestamp(),
+      })
+    );
+    return docRef.id;
+  }
+
+  async getRuntimeMessages(userId: string, threadId: string, count = 60): Promise<RuntimeChatMessage[]> {
+    const snap = await this.firestoreCall(() => {
+      const q = query(
+        collection(this.firestore, 'users', userId, 'runtime_threads', threadId, 'messages'),
+        orderBy('timestamp', 'asc'),
+        limit(count)
+      );
+      return getDocs(q);
+    });
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as RuntimeChatMessage));
+  }
+
+  async saveRuntimeMessage(userId: string, threadId: string, message: Omit<RuntimeChatMessage, 'id' | 'timestamp'>): Promise<void> {
+    await this.firestoreCall(() =>
+      addDoc(collection(this.firestore, 'users', userId, 'runtime_threads', threadId, 'messages'), {
+        ...message,
+        timestamp: serverTimestamp(),
+      })
+    );
+
+    await this.firestoreCall(() =>
+      updateDoc(doc(this.firestore, 'users', userId, 'runtime_threads', threadId), {
+        lastMessageAt: serverTimestamp(),
+      })
+    );
+  }
+
+  async deleteRuntimeThread(userId: string, threadId: string): Promise<void> {
+    const messages = await this.getRuntimeMessages(userId, threadId, 200);
+
+    for (const message of messages) {
+      if (!message.id) continue;
+      await this.firestoreCall(() =>
+        deleteDoc(doc(this.firestore, 'users', userId, 'runtime_threads', threadId, 'messages', message.id!))
+      );
+    }
+
+    await this.firestoreCall(() =>
+      deleteDoc(doc(this.firestore, 'users', userId, 'runtime_threads', threadId))
     );
   }
 
