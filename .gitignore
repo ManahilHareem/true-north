@@ -77,3 +77,6 @@ src/environments/environment.ts
 .dataconnect
 True North.docx
 finding.docx
+CLIENT_UPDATE_MEMO_V1.md
+CLIENT_UPDATE_MEMO_V1.docx
+.DS_Store

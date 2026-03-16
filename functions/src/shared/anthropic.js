@@ -8,7 +8,7 @@ function createAnthropicClient(apiKey) {
   return new Anthropic({ apiKey });
 }
 
-async function callText({ apiKey, systemPrompt, userMessage, model = "claude-sonnet-4-5-20250929", maxTokens = 2048 }) {
+async function callText({ apiKey, systemPrompt, userMessage, model = "claude-haiku-4-5-20251001", maxTokens = 2048 }) {
   const client = createAnthropicClient(apiKey);
   const response = await client.messages.create({
     model,
